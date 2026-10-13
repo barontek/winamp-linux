@@ -288,17 +288,17 @@ private:
     // A 25px tileable cell: the fixed cells are blitted once, the fill cells
     // repeat. Both titlebar rows share the same part layout.
     //
-    // Four of the six parts are fixed width. Of the two fill parts, the centre
-    // fill is the title container the text is drawn over, so it absorbs the
-    // slack; the right-hand fill keeps a single tile.
+    // Four of the six parts are fixed width. The centre fill is the title
+    // container, so it is only as wide as the title needs; everything left
+    // over goes to the right-hand scale fill.
     void drawTitlebar(QPainter &p, int w, bool active) {
         const int srcY = active ? gen::kTitlebarActiveY : gen::kTitlebarInactiveY;
         const int P = gen::kTitlebarPartW;
         const int fixed = P * 4; // four non-repeating parts
         const int flexible = qMax(2 * P, w - fixed);
 
-        int centerTiles = qMax(1, (flexible - P) / P);
-        int rightTiles = qMax(1, (flexible - centerTiles * P) / P);
+        const int centerTiles = titleCenterTiles(P);
+        const int rightTiles = qMax(1, (flexible - centerTiles * P) / P);
 
         int x = 0;
         for (int i = 0; i < 6; ++i) {
@@ -342,6 +342,21 @@ private:
         }
     }
 
+    int titlePixelWidth() const {
+        int total = 0;
+        for (const QChar &ch : TR("win.library.title", "Winamp Library")) {
+            const int idx = ch.toUpper().unicode() - 'A';
+            total += (idx >= 0 && idx < 26) ? gen::kFontGlyphW[idx] : gen::kSpaceAdvance;
+        }
+        return total;
+    }
+
+    // Tiles needed for the title container: the text plus padding, rounded up.
+    int titleCenterTiles(int partW) const {
+        const int needed = titlePixelWidth() + 2 * kTitlePadX;
+        return qMax(1, (needed + partW - 1) / partW);
+    }
+
     void drawTitle(QPainter &p, int w, bool active) {
         const QString title = TR("win.library.title", "Winamp Library");
         const int srcY = active ? gen::kFontHighlightY : gen::kFontNormalY;
@@ -349,23 +364,22 @@ private:
         const int y = (gen::kTitlebarH - gen::kFontH) / 2;
 
         // The text belongs over the centre fill, which starts after the two
-        // fixed left-hand parts and ends before the right-hand fill.
-        const int flexible = qMax(2 * P, w - P * 4);
-        const int centerTiles = qMax(1, (flexible - P) / P);
+        // fixed left-hand parts and ends before the right-hand scale fill.
         const int left = P * 2;
-        const int avail = qMax(0, centerTiles * P - P); // leave a tile of padding
+        const int limit = left + titleCenterTiles(P) * P;
+        const int limitText = limit - kTitlePadX;
 
-        int x = left + 4;
-        const int limit = left + avail;
+        int x = left + kTitlePadX;
         for (const QChar &ch : title) {
             const int idx = ch.toUpper().unicode() - 'A';
             const int gw = (idx >= 0 && idx < 26) ? gen::kFontGlyphW[idx] : gen::kSpaceAdvance;
-            if (x + gw > limit) break; // never spill out of the title container
+            if (x + gw > limitText) break; // never spill out of the title container
             if (idx >= 0 && idx < 26) {
                 p.drawPixmap(x, y, genBitmap, gen::kFontGlyphX[idx], srcY, gw, gen::kFontH);
             }
             x += gw;
         }
+        Q_UNUSED(w);
     }
 
     ResizeEdge hitTestResize(QPoint pos) {
@@ -475,6 +489,7 @@ private:
 
     static const int kMinW = 250;
     static const int kMinH = 120;
+    static const int kTitlePadX = 5;
 
     QTreeView *treeView = nullptr;
     QFileSystemModel *fileModel = nullptr;
