@@ -10,6 +10,20 @@
 #include <QIcon>
 #include <QIODevice>
 #include <QUrl>
+#include <QWidget>
+#include <QWindow>
+
+// Frameless windows implement their own title-bar dragging by calling
+// QWidget::move() on mouse move. Wayland forbids clients from positioning their
+// own toplevels — there is no "move this window" request, only a compositor-side
+// one — so those move() calls are silently ignored and the window stays stuck.
+// startSystemMove() hands the drag to the compositor, which then drives the
+// window through configure events. Returns false on X11 (and when the window has
+// no handle yet), where callers should fall back to the manual move() path.
+static inline bool waStartSystemDrag(QWidget *widget) {
+    QWindow *handle = widget->windowHandle();
+    return handle && handle->startSystemMove();
+}
 
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 #define playbackState state

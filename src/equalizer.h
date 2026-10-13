@@ -4,6 +4,7 @@
 #include <QWidget>
 #include <QPainter>
 #include <QMouseEvent>
+#include <QMoveEvent>
 #include <QMenu>
 #include <QSettings>
 #include "constants.h"
@@ -43,9 +44,13 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void moveEvent(QMoveEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     
 private:
+    void doCheckSnap();
+    bool snapInProgress = false;
+
     void drawEqFrequencyCurve(QPainter &p);
     void drawEqSlider(QPainter &p, int which, int destX);
     void paintModernEQ(QPainter &p);

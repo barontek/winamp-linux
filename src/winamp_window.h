@@ -10,6 +10,7 @@
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QMouseEvent>
+#include <QMoveEvent>
 #include <QApplication>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -2421,8 +2422,10 @@ protected:
             }
             
             // Drag window (titlebar or empty area)
-            isDragging = true;
-            dragPosition = waMouseGlobalPos(event) - frameGeometry().topLeft();
+            if (!waStartSystemDrag(this)) {
+                isDragging = true;
+                dragPosition = waMouseGlobalPos(event) - frameGeometry().topLeft();
+            }
             return;
         }
         
@@ -2523,8 +2526,10 @@ protected:
         if (y < 14) {
             if (x >= 264 && x < 273) { close(); return; }           // Close
             if (x >= 244 && x < 253) { showMinimized(); return; }   // Minimize
-            isDragging = true;
-            dragPosition = waMouseGlobalPos(event) - frameGeometry().topLeft();
+            if (!waStartSystemDrag(this)) {
+                isDragging = true;
+                dragPosition = waMouseGlobalPos(event) - frameGeometry().topLeft();
+            }
             return;
         }
         
@@ -2862,6 +2867,14 @@ protected:
             if (playlistWindow) playlistWindow->checkSnap();
             reflowDockedWindows();
         }
+    }
+    
+    // On Wayland the compositor owns the position while a system drag is in
+    // progress, so mouseMoveEvent never fires for it. Reflowing here keeps the
+    // docked equalizer/playlist windows attached during compositor-driven moves.
+    void moveEvent(QMoveEvent *event) override {
+        QWidget::moveEvent(event);
+        reflowDockedWindows();
     }
     
     void openFile() {

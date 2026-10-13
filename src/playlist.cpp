@@ -941,8 +941,10 @@ void PlaylistWindow::mousePressEvent(QMouseEvent *event) {
                 return;
             }
         }
-        isDragging = true;
-        dragPosition = waMouseGlobalPos(event) - frameGeometry().topLeft();
+        if (!waStartSystemDrag(this)) {
+            isDragging = true;
+            dragPosition = waMouseGlobalPos(event) - frameGeometry().topLeft();
+        }
         event->accept();
     }
 }
@@ -1023,6 +1025,13 @@ void PlaylistWindow::mouseReleaseEvent(QMouseEvent *event) {
     isResizing = false;
     isDraggingScrollbar = false;
     resizeEdge = NoEdge;
+}
+
+// Keeps the window snapped to the main window while the compositor drives the
+// position during a Wayland system drag (no mouseMoveEvent in that case).
+void PlaylistWindow::moveEvent(QMoveEvent *event) {
+    QWidget::moveEvent(event);
+    checkSnap();
 }
 
 void PlaylistWindow::mouseDoubleClickEvent(QMouseEvent *event) {
@@ -1542,6 +1551,16 @@ void PlaylistWindow::dockRightOfMain() {
 }
 
 void PlaylistWindow::checkSnap() {
+    // checkSnap() moves this window, and move() re-enters moveEvent() which
+    // calls checkSnap() again. Bail out on the nested call — the outer one is
+    // already applying the snap.
+    if (snapInProgress) return;
+    snapInProgress = true;
+    doCheckSnap();
+    snapInProgress = false;
+}
+
+void PlaylistWindow::doCheckSnap() {
     if (!mainWindow) return;
     if (!g_snapWindowsEnabled) {
         isSnappedToMain = false;

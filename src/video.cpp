@@ -103,8 +103,10 @@ void VideoWindow::mousePressEvent(QMouseEvent *event) {
                 return;
             }
             // Otherwise, start dragging
-            isDragging = true;
-            dragStartPos = waMouseGlobalPos(event) - frameGeometry().topLeft();
+            if (!waStartSystemDrag(this)) {
+                isDragging = true;
+                dragStartPos = waMouseGlobalPos(event) - frameGeometry().topLeft();
+            }
         } else if (event->button() == Qt::RightButton) {
             // Could show context menu here
         }

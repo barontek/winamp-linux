@@ -28,6 +28,16 @@ void EqualizerWindow::dockBelowMain() {
 }
 
 void EqualizerWindow::checkSnap() {
+    // checkSnap() moves this window, and move() re-enters moveEvent() which
+    // calls checkSnap() again. Bail out on the nested call — the outer one is
+    // already applying the snap.
+    if (snapInProgress) return;
+    snapInProgress = true;
+    doCheckSnap();
+    snapInProgress = false;
+}
+
+void EqualizerWindow::doCheckSnap() {
     if (!mainWindow) return;
     if (!g_snapWindowsEnabled) {
         isSnappedToMain = false;
@@ -584,8 +594,10 @@ void EqualizerWindow::showPresetsMenu(QPoint globalPos) {
             // Titlebar
             if (y < tbH) {
                 if (x >= width() - 18) { hide(); return; }
-                isDragging = true;
-                dragPosition = waMouseGlobalPos(event) - frameGeometry().topLeft();
+                if (!waStartSystemDrag(this)) {
+                    isDragging = true;
+                    dragPosition = waMouseGlobalPos(event) - frameGeometry().topLeft();
+                }
                 return;
             }
             // Content offset: center 318px EQ in window
@@ -626,8 +638,10 @@ void EqualizerWindow::showPresetsMenu(QPoint globalPos) {
         // Title bar
         if (y < 14) {
             if (x >= 264) { hide(); return; }
-            isDragging = true;
-            dragPosition = waMouseGlobalPos(event) - frameGeometry().topLeft();
+            if (!waStartSystemDrag(this)) {
+                isDragging = true;
+                dragPosition = waMouseGlobalPos(event) - frameGeometry().topLeft();
+            }
             return;
         }
         
@@ -708,6 +722,13 @@ void EqualizerWindow::showPresetsMenu(QPoint globalPos) {
     void EqualizerWindow::mouseReleaseEvent(QMouseEvent *event) {
         isDragging = false;
         draggingSlider = -1;
+    }
+    
+    // Keeps the window snapped to the main window while the compositor drives
+    // the position during a Wayland system drag (no mouseMoveEvent in that case).
+    void EqualizerWindow::moveEvent(QMoveEvent *event) {
+        QWidget::moveEvent(event);
+        checkSnap();
     }
     
     void EqualizerWindow::mouseDoubleClickEvent(QMouseEvent *event) {

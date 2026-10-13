@@ -4,6 +4,7 @@
 #include <QWidget>
 #include <QPainter>
 #include <QMouseEvent>
+#include <QMoveEvent>
 #include <QMenu>
 #include <QFileDialog>
 #include <QDropEvent>
@@ -159,6 +160,7 @@ protected:
     void mousePressEvent(QMouseEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
     void mouseReleaseEvent(QMouseEvent *) override;
+    void moveEvent(QMoveEvent *) override;
     void mouseDoubleClickEvent(QMouseEvent *) override;
     void dragEnterEvent(QDragEnterEvent *) override;
     void dropEvent(QDropEvent *) override;
@@ -166,6 +168,9 @@ protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
 
 private:
+    void doCheckSnap();
+    bool snapInProgress = false;
+
     void updateTotalTimeDisplay();
     void updateListGeometry();
     void paintModernPlaylist(QPainter &p);
