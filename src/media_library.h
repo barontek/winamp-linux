@@ -4,164 +4,205 @@
 #include <QWidget>
 #include <QPainter>
 #include <QMouseEvent>
+#include <QMoveEvent>
 #include <QMenu>
-#include <QTreeWidget>
-#include <QTableWidget>
-#include <QSplitter>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QLabel>
-#include <QHeaderView>
+#include <QTreeView>
 #include <QFileSystemModel>
 #include <QStandardPaths>
 #include <QCoreApplication>
+#include <QKeyEvent>
 #include "constants.h"
 #include "compat.h"
 #include "translator.h"
 
+// The "gen" window frame is composed from gen.bmp. Region layout follows the
+// classic skin spec: two 20px titlebar rows (active then inactive), each split
+// into six 25px parts, with sidewalls, bottom corners and a bottom fill tile.
+// Coordinates verified against the shipped assets/gen.bmp.
+namespace gen {
+
+// Titlebar parts, six 25x20 cells. `fill` parts repeat with the window width.
+struct TitlebarPart {
+    int x;        // source x in gen.bmp
+    bool repeats; // true for the horizontally scalable cells
+};
+static const TitlebarPart kTitlebarParts[] = {
+    {0, false},    // top left corner
+    {26, false},   // fixed left-end graphic
+    {52, true},    // main title container (text is drawn over this)
+    {78, false},   // fixed right-end graphic
+    {104, true},   // horizontal scale fill
+    {130, false},  // top right corner, carries the close button
+};
+static const int kTitlebarPartW = 25;
+static const int kTitlebarH = 20;
+static const int kTitlebarActiveY = 0;
+static const int kTitlebarInactiveY = 21;
+
+// Bottom edge and sidewalls.
+static const int kBottomH = 14;
+static const int kBottomLeftX = 0,   kBottomLeftY = 42;
+static const int kBottomRightX = 0,  kBottomRightY = 57;
+static const int kBottomLeftW = 125;
+static const int kBottomFillX = 127, kBottomFillY = 72, kBottomFillW = 25;
+
+static const int kMiddleLeftX = 127, kMiddleLeftY = 42, kMiddleLeftW = 11, kMiddleLeftH = 29;
+static const int kMiddleRightX = 139, kMiddleRightY = 42, kMiddleRightW = 8, kMiddleRightH = 29;
+
+static const int kCloseSpriteX = 148, kCloseSpriteY = 42, kCloseSpriteW = 9, kCloseSpriteH = 9;
+
+// Titlebar font. Highlighted row sits above the normal row; both share widths.
+// Offsets come from the delimiter columns in gen.bmp. The W/X source cell has no
+// full delimiter between the two glyphs, so that cell is split explicitly.
+static const int kFontGlyphX[26] = {1, 8, 16, 24, 31, 38, 45, 53, 60, 65,  72,  80,  86,
+                                    95, 102, 109, 116, 124, 132, 139, 145, 152, 159, 168, 176, 183};
+static const int kFontGlyphW[26] = {6, 7, 7, 6, 6, 6, 7, 6, 4, 6, 7, 5, 8,
+                                    6, 6,  6, 7,  7,  6,  5,  6,  6,  8,  7,  6,  5};
+static const int kFontHighlightY = 88;
+static const int kFontNormalY = 96;
+static const int kFontH = 7;
+static const int kSpaceAdvance = 3;
+
+// genex.bmp y=0 palette row (see the skin spec for gen windows).
+enum PaletteColor {
+    ItemBackground = 48,
+    ItemForeground = 50,
+    WindowBackground = 52,
+    ButtonText = 54,
+    WindowText = 56,
+    Divider = 58,
+    Selection = 60,
+    ListHeaderBackground = 62,
+    ListHeaderText = 64,
+    Scrollbar1 = 74,
+    Scrollbar2 = 76,
+    ScrollbarPressed1 = 78,
+    ScrollbarPressed2 = 80,
+    ScrollbarDead = 82,
+};
+
+} // namespace gen
+
 class MediaLibraryWindow : public QWidget {
     Q_OBJECT
-    
+
 public:
     MediaLibraryWindow(QWidget *parent = nullptr) : QWidget(parent) {
         setWindowTitle(TR("win.library.title", "Winamp Library"));
         setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
-        setAttribute(Qt::WA_DeleteOnClose, false);  // Don't delete on close, just hide
+        setAttribute(Qt::WA_DeleteOnClose, false);
+        setMinimumSize(kMinW, kMinH);
         resize(275, 300);
-        setMinimumSize(275, 200);
-        
-        // Load gen.bmp and genex.bmp for skinning
+
         loadSkin();
-        
-        // Create tree view for browsing music folders
+
         treeView = new QTreeView(this);
         fileModel = new QFileSystemModel(this);
-        
-        // Start at user's home music directory or home
+
         QString musicPath = QStandardPaths::writableLocation(QStandardPaths::MusicLocation);
         if (musicPath.isEmpty() || !QDir(musicPath).exists()) {
             musicPath = QDir::homePath();
         }
-        
         fileModel->setRootPath(musicPath);
-        
-        // Filter for audio files
+
         QStringList filters;
-        filters << "*.mp3" << "*.flac" << "*.ogg" << "*.wav" << "*.m4a" << "*.aac" 
+        filters << "*.mp3" << "*.flac" << "*.ogg" << "*.wav" << "*.m4a" << "*.aac"
                 << "*.wma" << "*.opus" << "*.mp4" << "*.avi" << "*.mkv" << "*.mov" << "*.webm";
         fileModel->setNameFilters(filters);
-        fileModel->setNameFilterDisables(false); // Hide non-matching files
-        
+        fileModel->setNameFilterDisables(false);
+
         treeView->setModel(fileModel);
         treeView->setRootIndex(fileModel->index(musicPath));
-        treeView->setColumnWidth(0, 200);
-        treeView->setStyleSheet(QString("QTreeView { background-color: %1; color: %2; border: none; }")
-                               .arg(bgColor.name()).arg(fgColor.name()));
-        treeView->setSelectionMode(QTreeView::ExtendedSelection);
-        
-        // Double-click to add to playlist
+        // The classic media library is a plain name tree.
+        for (int c = 1; c < fileModel->columnCount(); ++c) treeView->hideColumn(c);
+        treeView->setHeaderHidden(true); // gen windows have no column headers
+        treeView->setAnimated(false);
+        treeView->setIndentation(12);
+        treeView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+        treeView->setFrameShape(QFrame::NoFrame);
+        applyTreeStyle();
+
         connect(treeView, &QTreeView::doubleClicked, this, &MediaLibraryWindow::onItemDoubleClicked);
-        
+
         updateLayout();
-        
-        isDragging = false;
-        isResizing = false;
-        resizeEdge = NoEdge;
     }
-    
+
     void setPlaylistWindow(QObject *pl) { playlistWindow = pl; }
-    
+
 signals:
     void addToPlaylist(const QString &filePath);
     void addToPlaylistRecursive(const QString &dirPath);
-    
+
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
-        
+        const int w = width();
+        const int h = height();
+
         if (genBitmap.isNull()) {
-            // Fallback if skin not loaded
-            p.fillRect(rect(), Qt::darkGray);
+            p.fillRect(rect(), bgColor);
+            p.setPen(fgColor);
+            p.drawText(rect(), Qt::AlignCenter, tr("Winamp Library"));
             return;
         }
-        
-        // Draw window frame from gen.bmp
-        // The layout is similar to minibrowser: corners + edges that tile
-        // gen.bmp is 194x109:
-        // Top-left corner (0,0) to (24,24)
-        // Top-right corner (170,0) to (194,24)
-        // Bottom-left corner (0,85) to (24,109)
-        // Bottom-right corner (170,85) to (194,109)
-        // Left edge: (0,24) height 61
-        // Right edge: (170,24) height 61
-        // Top edge: (24,0) width 146
-        // Bottom edge: (24,85) width 146
-        
-        int w = width();
-        int h = height();
-        
-        // Corners
-        p.drawPixmap(0, 0, genBitmap, 0, 0, 24, 24);                    // top-left
-        p.drawPixmap(w - 24, 0, genBitmap, 170, 0, 24, 24);             // top-right
-        p.drawPixmap(0, h - 24, genBitmap, 0, 85, 24, 24);              // bottom-left
-        p.drawPixmap(w - 24, h - 24, genBitmap, 170, 85, 24, 24);       // bottom-right
-        
-        // Edges (tiled)
-        for (int x = 24; x < w - 24; x += 146) {
-            int tileW = qMin(146, w - 24 - x);
-            p.drawPixmap(x, 0, genBitmap, 24, 0, tileW, 24);            // top edge
-            p.drawPixmap(x, h - 24, genBitmap, 24, 85, tileW, 24);      // bottom edge
-        }
-        for (int y = 24; y < h - 24; y += 61) {
-            int tileH = qMin(61, h - 24 - y);
-            p.drawPixmap(0, y, genBitmap, 0, 24, 24, tileH);            // left edge
-            p.drawPixmap(w - 24, y, genBitmap, 170, 24, 24, tileH);     // right edge
-        }
-        
-        // Fill center with background color
-        p.fillRect(24, 24, w - 48, h - 48, bgColor);
-        
-        // Draw titlebar text "Winamp Library" using gen.bmp font
-        QString title = "Winamp Library";
-        int textX = 30;
-        for (const QChar &ch : title) {
-            QPoint charPos = getTitleCharPos(ch);
-            if (charPos.x() >= 0) {
-                p.drawPixmap(textX, 6, genBitmap, charPos.x(), charPos.y(), getCharWidth(ch), 10);
-                textX += getCharWidth(ch);
-            }
+
+        // Body fill behind everything.
+        p.fillRect(0, 0, w, h, bgColor);
+
+        drawTitlebar(p, w, isActiveWindow());
+        drawSidewalls(p, w, h);
+        drawBottom(p, w, h);
+        drawTitle(p, w, isActiveWindow());
+
+        if (closePressed && !closeRect().isEmpty()) {
+            p.drawPixmap(closeRect().x(), closeRect().y(), genBitmap,
+                         gen::kCloseSpriteX, gen::kCloseSpriteY,
+                         gen::kCloseSpriteW, gen::kCloseSpriteH);
         }
     }
-    
-    void resizeEvent(QResizeEvent*) override {
-        updateLayout();
+
+    void resizeEvent(QResizeEvent*) override { updateLayout(); }
+
+    void changeEvent(QEvent *e) override {
+        QWidget::changeEvent(e);
+        // Active/inactive titlebars are different bitmaps.
+        if (e->type() == QEvent::ActivationChange) update();
     }
-    
+
     void mousePressEvent(QMouseEvent *event) override {
-        if (event->button() == Qt::LeftButton) {
-            // Check for resize edges first
-            ResizeEdge edge = hitTestResize(event->pos());
-            if (edge != NoEdge) {
-                isResizing = true;
-                resizeEdge = edge;
-                resizeStartPos = waMouseGlobalPos(event);
-                resizeStartGeometry = geometry();
-                return;
-            }
-            
-            // Check if clicking in titlebar area (draggable)
-            if (event->pos().y() < 24) {
+        if (event->button() != Qt::LeftButton) return;
+        const QPoint pos = event->pos();
+
+        if (closeRect().contains(pos)) {
+            closePressed = true;
+            update();
+            return;
+        }
+
+        ResizeEdge edge = hitTestResize(pos);
+        if (edge != NoEdge) {
+            isResizing = true;
+            resizeEdge = edge;
+            resizeStartPos = waMouseGlobalPos(event);
+            resizeStartGeometry = geometry();
+            return;
+        }
+
+        // Titlebar drag. Wayland ignores client-side move(), so let the
+        // compositor own the drag when it can and fall back otherwise.
+        if (pos.y() < gen::kTitlebarH) {
+            if (!waStartSystemDrag(this)) {
                 isDragging = true;
-                dragStartPos = event->pos();
+                dragStartPos = waMouseGlobalPos(event) - frameGeometry().topLeft();
             }
         }
     }
-    
+
     void mouseMoveEvent(QMouseEvent *event) override {
         if (isResizing) {
             QPoint delta = waMouseGlobalPos(event) - resizeStartPos;
             QRect newGeom = resizeStartGeometry;
-            
+
             if (resizeEdge & LeftEdge) {
                 int newX = resizeStartGeometry.x() + delta.x();
                 int newWidth = resizeStartGeometry.width() - delta.x();
@@ -170,9 +211,8 @@ protected:
                     newGeom.setWidth(newWidth);
                 }
             }
-            if (resizeEdge & RightEdge) {
+            if (resizeEdge & RightEdge)
                 newGeom.setWidth(qMax(minimumWidth(), resizeStartGeometry.width() + delta.x()));
-            }
             if (resizeEdge & TopEdge) {
                 int newY = resizeStartGeometry.y() + delta.y();
                 int newHeight = resizeStartGeometry.height() - delta.y();
@@ -181,61 +221,58 @@ protected:
                     newGeom.setHeight(newHeight);
                 }
             }
-            if (resizeEdge & BottomEdge) {
+            if (resizeEdge & BottomEdge)
                 newGeom.setHeight(qMax(minimumHeight(), resizeStartGeometry.height() + delta.y()));
-            }
-            
+
             setGeometry(newGeom);
             return;
         }
-        
+
         if (isDragging) {
             move(waMouseGlobalPos(event) - dragStartPos);
             return;
         }
-        
-        // Update cursor for resize edges
-        ResizeEdge edge = hitTestResize(event->pos());
-        updateCursorForEdge(edge);
+
+        updateCursorForEdge(hitTestResize(event->pos()));
     }
-    
+
     void mouseReleaseEvent(QMouseEvent *event) override {
-        if (event->button() == Qt::LeftButton) {
-            isDragging = false;
-            isResizing = false;
-            resizeEdge = NoEdge;
+        if (event->button() != Qt::LeftButton) return;
+        if (closePressed) {
+            closePressed = false;
+            update();
+            if (closeRect().contains(event->pos())) close();
+            return;
         }
+        isDragging = false;
+        isResizing = false;
+        resizeEdge = NoEdge;
     }
-    
+
     void mouseDoubleClickEvent(QMouseEvent *event) override {
-        // Double-click titlebar to close
-        if (event->pos().y() < 24) {
-            hide();
-        }
+        Q_UNUSED(event);
     }
-    
+
     void keyPressEvent(QKeyEvent *event) override {
         if (event->key() == Qt::Key_Escape) {
-            hide();
+            close();
         } else {
             QWidget::keyPressEvent(event);
         }
     }
-    
+
 private slots:
     void onItemDoubleClicked(const QModelIndex &index) {
         QString path = fileModel->filePath(index);
         QFileInfo info(path);
-        
+
         if (info.isFile()) {
-            // Single file - add to playlist
             emit addToPlaylist(path);
         } else if (info.isDir()) {
-            // Directory - add all audio files recursively
             emit addToPlaylistRecursive(path);
         }
     }
-    
+
 private:
     enum ResizeEdge {
         NoEdge = 0,
@@ -244,87 +281,109 @@ private:
         TopEdge = 4,
         BottomEdge = 8
     };
-    
-    void loadSkin() {
-        // Try to load gen.bmp and genex.bmp from skin paths
-        QString appDir = QCoreApplication::applicationDirPath();
-        QStringList skinPaths = {
-            "skins/default",
-            "assets"
-        };
-        for (const QString &root : winampDataRoots(appDir)) {
-            skinPaths << (root + "/skins/default")
-                      << (root + "/resource");
-        }
-        
-        for (const QString &basePath : skinPaths) {
-            QString genPath = basePath + "/gen.bmp";
-            QString genexPath = basePath + "/genex.bmp";
-            
-            if (QFile::exists(genPath) && genBitmap.isNull()) {
-                genBitmap = QPixmap(genPath);
+
+    // A 25px tileable cell: the fixed cells are blitted once, the fill cells
+    // repeat. Both titlebar rows share the same part layout.
+    void drawTitlebar(QPainter &p, int w, bool active) {
+        const int srcY = active ? gen::kTitlebarActiveY : gen::kTitlebarInactiveY;
+        const int P = gen::kTitlebarPartW;
+        const int fixed = P * 4; // four non-repeating parts
+
+        int x = 0;
+        for (int i = 0; i < 6; ++i) {
+            const gen::TitlebarPart &part = gen::kTitlebarParts[i];
+
+            if (!part.repeats) {
+                p.drawPixmap(x, 0, genBitmap, part.x, srcY, P, gen::kTitlebarH);
+                x += P;
+                continue;
             }
-            if (QFile::exists(genexPath) && genexBitmap.isNull()) {
-                genexBitmap = QPixmap(genexPath);
+
+            // Fill cells: one tile minimum, then share the remaining width.
+            // The first fill (the title container) absorbs the slack so the
+            // right-hand fill keeps exactly one tile.
+            if (i == 2) {
+                int nRightFill = qMax(1, (w - fixed - P) / P);
+                int nCenter = qMax(1, (w - fixed - nRightFill * P) / P);
+                for (int n = 0; n < nCenter; ++n) {
+                    p.drawPixmap(x, 0, genBitmap, part.x, srcY, P, gen::kTitlebarH);
+                    x += P;
+                }
+            } else {
+                int remaining = w - fixed - P; // reserve the center fill
+                int n = qMax(1, remaining / P);
+                for (int k = 0; k < n && x < w; ++k) {
+                    p.drawPixmap(x, 0, genBitmap, part.x, srcY, P, gen::kTitlebarH);
+                    x += P;
+                }
             }
         }
-        
-        // Load colors from genex.bmp if available
-        if (!genexBitmap.isNull()) {
-            QImage img = genexBitmap.toImage();
-            if (img.width() >= 95 && img.height() >= 1) {
-                // Read color palette from genex.bmp (x=48 onwards, every other pixel)
-                bgColor = img.pixelColor(52, 0);    // x=52: window background
-                fgColor = img.pixelColor(56, 0);    // x=56: window text color
+    }
+
+    void drawSidewalls(QPainter &p, int w, int h) {
+        const int top = gen::kTitlebarH;
+        const int bottom = h - gen::kBottomH;
+        for (int y = top; y < bottom; y += gen::kMiddleLeftH) {
+            int tileH = qMin(gen::kMiddleLeftH, bottom - y);
+            p.drawPixmap(0, y, genBitmap, gen::kMiddleLeftX, gen::kMiddleLeftY,
+                         gen::kMiddleLeftW, tileH);
+            p.drawPixmap(w - gen::kMiddleRightW, y, genBitmap, gen::kMiddleRightX, gen::kMiddleRightY,
+                         gen::kMiddleRightW, tileH);
+        }
+    }
+
+    void drawBottom(QPainter &p, int w, int h) {
+        const int y = h - gen::kBottomH;
+        p.drawPixmap(0, y, genBitmap, gen::kBottomLeftX, gen::kBottomLeftY,
+                     gen::kBottomLeftW, gen::kBottomH);
+        p.drawPixmap(w - gen::kBottomLeftW, y, genBitmap, gen::kBottomRightX, gen::kBottomRightY,
+                     gen::kBottomLeftW, gen::kBottomH);
+
+        // Tile the middle; clip the last tile if it overruns the right corner.
+        int x = gen::kBottomLeftW;
+        const int right = w - gen::kBottomLeftW;
+        while (x < right) {
+            int tileW = qMin(gen::kBottomFillW, right - x);
+            p.drawPixmap(x, y, genBitmap, gen::kBottomFillX, gen::kBottomFillY,
+                         tileW, gen::kBottomH);
+            x += gen::kBottomFillW;
+        }
+    }
+
+    void drawTitle(QPainter &p, int w, bool active) {
+        const QString title = TR("win.library.title", "Winamp Library");
+        const int srcY = active ? gen::kFontHighlightY : gen::kFontNormalY;
+        const int startX = gen::kTitlebarPartW * 2 + 4; // after the two fixed left parts
+        const int y = (gen::kTitlebarH - gen::kFontH) / 2;
+
+        int x = startX;
+        for (const QChar &ch : title) {
+            const int idx = ch.toUpper().unicode() - 'A';
+            if (idx < 0 || idx >= 26) {
+                x += gen::kSpaceAdvance;
+                continue;
             }
+            p.drawPixmap(x, y, genBitmap, gen::kFontGlyphX[idx], srcY,
+                         gen::kFontGlyphW[idx], gen::kFontH);
+            x += gen::kFontGlyphW[idx];
         }
-        
-        // Fallback colors if not loaded
-        if (!bgColor.isValid()) bgColor = QColor(36, 36, 60);
-        if (!fgColor.isValid()) fgColor = QColor(255, 255, 255);
     }
-    
-    QPoint getTitleCharPos(QChar ch) {
-        // gen.bmp titlebar font starts at y=99 (highlighted) and y=100-109 (normal)
-        // We'll use the highlighted version for now
-        // The font is variable width, first color before 'A' is delimiter
-        // For simplicity, use a standard 5-pixel width assumption
-        int yPos = 99;  // Highlighted titlebar font row
-        
-        if (ch >= 'A' && ch <='Z') {
-            return QPoint(3 + (ch.toLatin1() - 'A') * 5, yPos);
-        } else if (ch >= 'a' && ch <= 'z') {
-            return QPoint(3 + (ch.toLatin1() - 'a') * 5, yPos);
-        } else if (ch >= '0' && ch <= '9') {
-            return QPoint(3 + 26 * 5 + (ch.toLatin1() - '0') * 5, yPos);
-        } else if (ch == ' ') {
-            return QPoint(3 + 36 * 5, yPos);
-        }
-        return QPoint(-1, -1); // Unknown character
-    }
-    
-    int getCharWidth(QChar ch) {
-        // For simplicity, assume 5px width for all chars
-        // A real implementation would read the delimiter pixel
-        if (ch == ' ') return 3;
-        return 5;
-    }
-    
+
     ResizeEdge hitTestResize(QPoint pos) {
-        const int edgeSize = 8;
-        int w = width();
-        int h = height();
+        const int edgeSize = 4;
+        const int w = width();
+        const int h = height();
         ResizeEdge edge = NoEdge;
-        
+
         if (pos.x() < edgeSize) edge = (ResizeEdge)(edge | LeftEdge);
         else if (pos.x() > w - edgeSize) edge = (ResizeEdge)(edge | RightEdge);
-        
+
         if (pos.y() < edgeSize) edge = (ResizeEdge)(edge | TopEdge);
         else if (pos.y() > h - edgeSize) edge = (ResizeEdge)(edge | BottomEdge);
-        
+
         return edge;
     }
-    
+
     void updateCursorForEdge(ResizeEdge edge) {
         if (edge == NoEdge) {
             setCursor(Qt::ArrowCursor);
@@ -338,28 +397,106 @@ private:
             setCursor(Qt::SizeVerCursor);
         }
     }
-    
-    void updateLayout() {
-        // Position tree view inside the window frame (24px border on all sides)
-        if (treeView) {
-            treeView->setGeometry(24, 24, width() - 48, height() - 48);
+
+    void loadSkin() {
+        QString appDir = QCoreApplication::applicationDirPath();
+        QStringList skinPaths = {"skins/default", "assets"};
+        for (const QString &root : winampDataRoots(appDir)) {
+            skinPaths << (root + "/skins/default") << (root + "/resource");
         }
+
+        for (const QString &basePath : skinPaths) {
+            const QString genPath = basePath + "/gen.bmp";
+            const QString genexPath = basePath + "/genex.bmp";
+            if (QFile::exists(genPath) && genBitmap.isNull()) genBitmap = QPixmap(genPath);
+            if (QFile::exists(genexPath) && genexBitmap.isNull()) genexBitmap = QPixmap(genexPath);
+        }
+
+        if (!genexBitmap.isNull()) {
+            QImage img = genexBitmap.toImage();
+            auto read = [&](int x) {
+                return (img.width() > x && img.height() > 0) ? img.pixelColor(x, 0) : QColor();
+            };
+            bgColor = read(gen::WindowBackground);
+            fgColor = read(gen::WindowText);
+            itemBg = read(gen::ItemBackground);
+            itemFg = read(gen::ItemForeground);
+            selectionColor = read(gen::Selection);
+            sbGroove = read(gen::Scrollbar1);
+            sbHandle = read(gen::Scrollbar2);
+            sbHandleActive = read(gen::ScrollbarPressed1);
+        }
+
+        if (!bgColor.isValid()) bgColor = QColor(36, 36, 60);
+        if (!fgColor.isValid()) fgColor = QColor(255, 255, 255);
+        if (!itemBg.isValid()) itemBg = bgColor;
+        if (!itemFg.isValid()) itemFg = fgColor;
+        if (!selectionColor.isValid()) selectionColor = QColor(0, 0, 198);
+        if (!sbGroove.isValid()) sbGroove = bgColor;
+        if (!sbHandle.isValid()) sbHandle = fgColor;
+        if (!sbHandleActive.isValid()) sbHandleActive = selectionColor;
     }
-    
-    QTreeView *treeView;
-    QFileSystemModel *fileModel;
+
+    void applyTreeStyle() {
+        treeView->setStyleSheet(QString(
+            "QTreeView { background-color: %1; color: %2; border: none; }"
+            "QTreeView::item { background-color: %1; color: %2; }"
+            "QTreeView::item:selected { background-color: %3; color: %2; }"
+            "QTreeView::item:hover { background-color: %3; }"
+            "QScrollBar:vertical { background: %4; width: 12px; border: none; }"
+            "QScrollBar:horizontal { background: %4; height: 12px; border: none; }"
+            "QScrollBar::handle:vertical { background: %5; min-height: 20px; border: none; }"
+            "QScrollBar::handle:horizontal { background: %5; min-width: 20px; border: none; }"
+            "QScrollBar::handle:hover { background: %6; }"
+            "QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: %6; }"
+            "QScrollBar::add-line, QScrollBar::sub-line { height: 0px; width: 0px; border: none; }"
+            "QScrollBar::add-page, QScrollBar::sub-page { background: none; }")
+            .arg(itemBg.name(), itemFg.name(), selectionColor.name(),
+                 sbGroove.name(), sbHandle.name(), sbHandleActive.name()));
+    }
+
+    void updateLayout() {
+        if (!treeView) return;
+        const QRect area = contentRect();
+        treeView->setGeometry(area);
+    }
+
+    QRect contentRect() const {
+        return QRect(gen::kMiddleLeftW,
+                     gen::kTitlebarH,
+                     qMax(0, width() - gen::kMiddleLeftW - gen::kMiddleRightW),
+                     qMax(0, height() - gen::kTitlebarH - gen::kBottomH));
+    }
+
+    QRect closeRect() const {
+        // The close button lives inside the top-right corner piece.
+        return QRect(width() - gen::kTitlebarPartW + 13, 4,
+                     gen::kCloseSpriteW + 2, gen::kCloseSpriteH + 2);
+    }
+
+    static const int kMinW = 250;
+    static const int kMinH = 120;
+
+    QTreeView *treeView = nullptr;
+    QFileSystemModel *fileModel = nullptr;
     QPixmap genBitmap;
     QPixmap genexBitmap;
     QColor bgColor;
     QColor fgColor;
-    
-    bool isDragging;
-    bool isResizing;
-    ResizeEdge resizeEdge;
+    QColor itemBg;
+    QColor itemFg;
+    QColor selectionColor;
+    QColor sbGroove;
+    QColor sbHandle;
+    QColor sbHandleActive;
+
+    bool isDragging = false;
+    bool isResizing = false;
+    bool closePressed = false;
+    ResizeEdge resizeEdge = NoEdge;
     QPoint dragStartPos;
     QPoint resizeStartPos;
     QRect resizeStartGeometry;
-    
+
     QObject *playlistWindow = nullptr;
 };
-
