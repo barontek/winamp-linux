@@ -132,6 +132,9 @@ public:
 signals:
     void addToPlaylist(const QString &filePath);
     void addToPlaylistRecursive(const QString &dirPath);
+    // Emitted instead of addToPlaylist for a double-clicked file, so the
+    // receiving window can add and start playback in one step.
+    void playFile(const QString &filePath);
 
 protected:
     void paintEvent(QPaintEvent*) override {
@@ -267,7 +270,7 @@ private slots:
         QFileInfo info(path);
 
         if (info.isFile()) {
-            emit addToPlaylist(path);
+            emit playFile(path);
         } else if (info.isDir()) {
             emit addToPlaylistRecursive(path);
         }
@@ -284,38 +287,27 @@ private:
 
     // A 25px tileable cell: the fixed cells are blitted once, the fill cells
     // repeat. Both titlebar rows share the same part layout.
+    //
+    // Four of the six parts are fixed width. Of the two fill parts, the centre
+    // fill is the title container the text is drawn over, so it absorbs the
+    // slack; the right-hand fill keeps a single tile.
     void drawTitlebar(QPainter &p, int w, bool active) {
         const int srcY = active ? gen::kTitlebarActiveY : gen::kTitlebarInactiveY;
         const int P = gen::kTitlebarPartW;
         const int fixed = P * 4; // four non-repeating parts
+        const int flexible = qMax(2 * P, w - fixed);
+
+        int centerTiles = qMax(1, (flexible - P) / P);
+        int rightTiles = qMax(1, (flexible - centerTiles * P) / P);
 
         int x = 0;
         for (int i = 0; i < 6; ++i) {
             const gen::TitlebarPart &part = gen::kTitlebarParts[i];
+            const int n = part.repeats ? (i == 2 ? centerTiles : rightTiles) : 1;
 
-            if (!part.repeats) {
+            for (int t = 0; t < n && x < w; ++t) {
                 p.drawPixmap(x, 0, genBitmap, part.x, srcY, P, gen::kTitlebarH);
                 x += P;
-                continue;
-            }
-
-            // Fill cells: one tile minimum, then share the remaining width.
-            // The first fill (the title container) absorbs the slack so the
-            // right-hand fill keeps exactly one tile.
-            if (i == 2) {
-                int nRightFill = qMax(1, (w - fixed - P) / P);
-                int nCenter = qMax(1, (w - fixed - nRightFill * P) / P);
-                for (int n = 0; n < nCenter; ++n) {
-                    p.drawPixmap(x, 0, genBitmap, part.x, srcY, P, gen::kTitlebarH);
-                    x += P;
-                }
-            } else {
-                int remaining = w - fixed - P; // reserve the center fill
-                int n = qMax(1, remaining / P);
-                for (int k = 0; k < n && x < w; ++k) {
-                    p.drawPixmap(x, 0, genBitmap, part.x, srcY, P, gen::kTitlebarH);
-                    x += P;
-                }
             }
         }
     }
@@ -353,19 +345,26 @@ private:
     void drawTitle(QPainter &p, int w, bool active) {
         const QString title = TR("win.library.title", "Winamp Library");
         const int srcY = active ? gen::kFontHighlightY : gen::kFontNormalY;
-        const int startX = gen::kTitlebarPartW * 2 + 4; // after the two fixed left parts
+        const int P = gen::kTitlebarPartW;
         const int y = (gen::kTitlebarH - gen::kFontH) / 2;
 
-        int x = startX;
+        // The text belongs over the centre fill, which starts after the two
+        // fixed left-hand parts and ends before the right-hand fill.
+        const int flexible = qMax(2 * P, w - P * 4);
+        const int centerTiles = qMax(1, (flexible - P) / P);
+        const int left = P * 2;
+        const int avail = qMax(0, centerTiles * P - P); // leave a tile of padding
+
+        int x = left + 4;
+        const int limit = left + avail;
         for (const QChar &ch : title) {
             const int idx = ch.toUpper().unicode() - 'A';
-            if (idx < 0 || idx >= 26) {
-                x += gen::kSpaceAdvance;
-                continue;
+            const int gw = (idx >= 0 && idx < 26) ? gen::kFontGlyphW[idx] : gen::kSpaceAdvance;
+            if (x + gw > limit) break; // never spill out of the title container
+            if (idx >= 0 && idx < 26) {
+                p.drawPixmap(x, y, genBitmap, gen::kFontGlyphX[idx], srcY, gw, gen::kFontH);
             }
-            p.drawPixmap(x, y, genBitmap, gen::kFontGlyphX[idx], srcY,
-                         gen::kFontGlyphW[idx], gen::kFontH);
-            x += gen::kFontGlyphW[idx];
+            x += gw;
         }
     }
 

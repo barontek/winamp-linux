@@ -334,6 +334,13 @@ public:
         connect(mediaLibraryWindow, &MediaLibraryWindow::addToPlaylist, this, [this](const QString &path) {
             playlistWindow->addTrack(path);
         });
+        // Double-clicking a file in the library plays it, not just queues it.
+        connect(mediaLibraryWindow, &MediaLibraryWindow::playFile, this, [this](const QString &path) {
+            playlistWindow->addTrack(path);
+            int idx = playlistWindow->trackCount() - 1;
+            if (idx >= 0) playlistWindow->setCurrentTrackIndex(idx);
+            playTrack(path);
+        });
         connect(mediaLibraryWindow, &MediaLibraryWindow::addToPlaylistRecursive, this, [this](const QString &dirPath) {
             // Add all audio files in directory recursively
             QStringList queue;
